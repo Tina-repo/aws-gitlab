@@ -1,0 +1,34 @@
+Resources:
+#ROLE W/ IMBEDDED POLICY
+  GitLabS3Access: #Name of the role 
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument: 
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com #?
+            Action:
+              - 'sts:AssumeRole' #??
+      Policies:
+          - PolicyName: gl-s3-policy
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action:
+                  - 's3:AbortMultipleUpload'
+                  - 's3:CompletemultipartUpload'
+                  - 's3:ListBucket'
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:DeleteObject'
+                  - 's3:PutObjectAcl' 
+                  Resource: 'arn:aws:s3:::aws-gitlab-bucket'
+  RootInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles: 
+        - !Ref GitLabS3Access
+
+
