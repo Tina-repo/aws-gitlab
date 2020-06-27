@@ -1,6 +1,7 @@
 Resources:
-#ROLE W/ IMBEDDED POLICY
-  GitLabS3Access: #Name of the role 
+
+  #ROLE W/ IMBEDDED POLICY
+  GitLabS3Access: 
     Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument: 
@@ -8,9 +9,9 @@ Resources:
           - Effect: Allow
             Principal:
               Service:
-                - ec2.amazonaws.com #?
+                - ec2.amazonaws.com
             Action:
-              - 'sts:AssumeRole' #??
+              - 'sts:AssumeRole'
       Policies:
           - PolicyName: gl-s3-policy
             PolicyDocument:
@@ -24,11 +25,190 @@ Resources:
                   - 's3:GetObject'
                   - 's3:DeleteObject'
                   - 's3:PutObjectAcl' 
-                  Resource: 'arn:aws:s3:::aws-gitlab-bucket'
-  RootInstanceProfile:
+                  Resource:
+                    gl-s3-bucket:
+                      Type: AWS::S3::Bucket
+  GitLabS3InstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
     Properties:
       Roles: 
         - !Ref GitLabS3Access
+
+  #VPC  
+  gitlabVPC: 
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16 
+      EnableDnsHostnames: true 
+
+      #PUBLIC SUBNETS
+      gitlab-public-10.0.0.0:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref gitlabVPC
+          AvailabilityZone: us-west-2a 
+          CidrBlock: 10.0.0.0/24 
+          MapPublicIpOnLaunch: true 
+
+      gitlab-public-10.0.2.0:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref gitlabVPC
+          AvailabilityZone: us-west-2b 
+          CidrBlock: 10.0.2.0/24 
+          MapPublicIpOnLaunch: true 
+
+      #PRIVATE SUBNETS
+      gitlab-private-10.0.1.0:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref gitlabVPC
+          AvailabilityZone: us-west-2a 
+          CidrBlock: 10.0.1.0/24
+          MapPublicIpOnLaunch: false 
+
+      gitlab-private-10.0.3.0:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref gitlabVPC
+          AvailabilityZone: us-west-2b 
+          CidrBlock: 10.0.3.0/24
+          MapPublicIpOnLaunch: false 
+
+      #INTERNET GATEWAY
+      gitlab-gateway:
+        Type: 'AWS::EC2::InternetGateway'
+      
+      gitlab-GatewayAttachment:
+        Type: 'AWS::EC2::VPCGatewayAttachment'
+        Properties:
+          VpcId: !Ref gitlabVPC
+          InternetGatewayId: !Ref gitlab-gateway
+      
+      #NAT GATEWAY
+      gitlab-NAT-gateway-10.0.0.0:
+        Type: AWS::EC2::NatGateway
+        Properties: 
+          AllocationId: #not sure about this
+            # Type: 'AWS::EC2::EIP'
+            # Properties: 
+            #   Domain: !Ref gitlabVPC #???
+          SubnetId: !Ref gitlab-public-10.0.0.0
+
+      gitlab-NAT-gateway-10.0.2.0:
+        Type: AWS::EC2::NatGateway
+        Properties: 
+          AllocationId:  #?? :( 
+          SubnetId: !Ref gitlab-public-10.0.2.0
+
+      #ROUTE TABLES
+      gitlab-public-RouteTable:
+        Type: 'AWS::EC2::RouteTable' 
+        Properties:
+          VpcId: !Ref gitlabVPC
+      
+      gitlab-public-Route:
+        Type: 'AWS::EC2::Route'
+        DependsOn: gitlab-GatewayAttachment
+        Properties:
+          RouteTableId: !Ref gitlab-public-RouteTable
+          DestinationCidrBlock: 0.0.0.0/0
+          GatewayId: !Ref gitlab-gateway
+      
+      gitlab-public-10.0.0.0-RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+        Properties:
+          SubnetId: !Ref gitlab-public-10.0.0.0
+          RouteTableId: !Ref gitlab-public-RouteTable
+
+      gitlab-public-10.0.2.0-RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+        Properties:
+          SubnetId: !Ref gitlab-public-10.0.2.0
+          RouteTableId: !Ref gitlab-public-RouteTable
+
+      gitlab-private-RouteTable-a:
+        Type: 'AWS::EC2::RouteTable' 
+        Properties:
+          VpcId: !Ref gitlabVPC
+      
+      gitlab-private-Route-a:
+        Type: 'AWS::EC2::Route' 
+        Properties:
+          RouteTableId: !Ref gitlab-private-RouteTable-a
+          DestinationCidrBlock: 0.0.0.0/0
+      
+      gitlab-private-10.0.1.0-RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+        Properties:
+          SubnetId: !Ref gitlab-private-10.0.1.0
+          RouteTableId: !Ref gitlab-private-RouteTable-a 
+
+      gitlab-private-RouteTable-b:
+            Type: 'AWS::EC2::RouteTable' 
+            Properties:
+              VpcId: !Ref gitlabVPC
+          
+      gitlab-private-Route-b:
+        Type: 'AWS::EC2::Route' 
+        Properties:
+          RouteTableId: !Ref gitlab-private-RouteTable-b
+          DestinationCidrBlock: 0.0.0.0/0
+
+      gitlab-private-10.0.3.0-RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+        Properties:
+          SubnetId: !Ref gitlab-private-10.0.3.0
+          RouteTableId: !Ref gitlab-private-RouteTable-b
+
+      #LOAD BALANCER
+      gitlab-LoadBalancer:
+        Type: 'AWS::ElasticLoadBalancing::LoadBalancer'
+        Properties: 
+          Listeners: 
+          - LoadBalancerPort: '80'
+            InstancePort: '80'
+            Protocol: HTTP
+          - LoadBalancerPort: '443'
+            InstancePort: '443'
+            Protocol: HTTPS
+          - LoadBalancerPort: '22'
+            InstancePort: '22'
+            Protocol: TCP
+          HealthCheck: #not sure about this section
+            Target: HTTP:80/
+            #HealthyThreshold: '3'
+            #UnhealthyThreshold: '5'
+            #Interval: '30'
+            #Timeout: '5'
+          #Req:"Ping Protocol (HTTP), Ping Port (80), Ping Path (/users/sign_in)"
+          LoadbalancerName: gitlab-LoadBalancer
+          Policies:
+            #??? 
+          Scheme: internet-facing #?
+          Security Groups: #not sure about this section
+            gitlab-SecurityGroup:
+              Type: AWS::EC2::SecurityGroup
+              Properties:
+                GroupName: gitlab-loadbalancer-sec-group 
+                GroupDescription: Allow HTTP and HTTPS traffic from anywhere 
+                VpcId: !Ref gitlabVPC
+                SecurityGroupIngress: 
+                - IpProtocol: HTTP
+                FromPort: 80
+                ToPort: 80
+                CidrIp: 0.0.0.0/0 
+                -IpProtocol: HTTPS
+                FromPort: 443
+                ToPort: 443
+                CidrIp: 0.0.0.0/0
+          #Other reqs I'm not sure how to address:
+          #allow SSH traffic, selct a custom source, add single trusted IP address or IP address range in CIDR notation
+          #SSL/TLS certificate from ACM?? Select a Cipher??
+          Subnets: gitlab-public-10.0.0.0 , gitlab-public-10.0.2.0
+
+          #one subnet per availability zone (choose the 2 public ones)
+      
+      #DNS FOR LOAD BALANCER 
 
 
