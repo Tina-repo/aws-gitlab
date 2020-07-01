@@ -49,15 +49,37 @@ Parameters:
     Description: CIDR Block for Private Subnet B
     Default: 10.0.3.0/24
 
-  #LOAD BALANCER SECURITY GROUP
+  #SECURITY GROUPS
   GitLabLoadBalancerSecurityGroupCIDRParameter:
     Type: String
     Description: IPv4 address range for Load Balancer Security Group
 
-  #RDS SECURITY GROUP
   GitLabRDSSecurityGroupCIDRParameter:
     Type: String
     Description: CidrBlock for RDS Security Group
+  
+  #DATABASE
+  DBInstanceClassParameter:
+    Type: String
+    Description: DB EC2 Instnace Class. Default is db.m4.large
+    Default: db.m4.large  
+
+  DBInstanceIdentifierParameter:
+    Type: String
+    Description: Name for the DB instance. 
+  
+  GitLabDBMasterUsernameParameter:
+    Type: String
+    Description: Master user name for the DB instance
+  
+  GitLabDBMasterUserPasswordParameter:
+    Type: String
+    Description: Password for the master user.
+
+  GitLabAllocatedStorageParameter:
+    Type: String
+    Description: Amount of storage in gigabytes to be allocated for the database intsance
+    Default: '100' #minimum for PostgreSQL 
 
 Resources:
   #S3 BUCKET
@@ -158,6 +180,7 @@ Resources:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+
   GitLabElasticIPB:
     Type: AWS::EC2::EIP
     Properties:
@@ -289,6 +312,38 @@ Resources:
       Subnets:
         - !Ref GitLabPublicSubnetA
         - !Ref GitLabPublicSubnetB
+
+  #RDS POSTGRESQL DATABASE
+  GitLabDBSubnetGroup: 
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Group includes GitLabPrivateSubnetA and GitLabPrivateSubnetB
+      #DBSubnetGroupName: #may not need
+      SubnetIds:
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB 
+
+  GitLabDB:
+    Type: AWS::RDS::DBInstance 
+    Properties: 
+      AllocatedStorage: !Ref GitLabAllocatedStorageParameter #provisioned IOPS (SSD) for storage type?
+      AutoMinorVersionUpgrade: False
+      #BackupRetentionPeriod:     #preferred backup settings == ? 
+      #DBClusterIdentifier: #related to Redis Cluster later?
+      DBInstanceClass: !Ref DBInstanceClassParameter 
+      DBInstanceIdentifier: !Ref DBInstanceIdentifierParameter
+      DBSecurityGroups: 
+        - !Ref GitLabRDSSecurityGroup
+      DBSubnetGroupName: !Ref GitLabDBSubnetGroup 
+      Engine: postgres #or paramaterize? 
+      MasterUsername: !Ref GitLabDBMasterUsernameParameter
+      MasterUserPassword: !Ref GitLabDBMasterUserPasswordParameter 
+      MultiAZ: True
+      #PreferredBackupWindow: 
+      #PreferredMaintenanceWindow: 
+
+      #it asks to make a 'standby instance'?? how
+
 
 
       
