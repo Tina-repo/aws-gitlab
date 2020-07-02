@@ -81,6 +81,12 @@ Parameters:
     Description: Amount of storage in gigabytes to be allocated for the database intsance
     Default: '100' #minimum for PostgreSQL 
 
+  #ELASTICACHE/REDIS
+  CacheNodeTypeParameter:
+    Type: String
+    Description: Node type;  Multi-AZ not supported on T1 instances
+    Default: cache.t3.medium 
+
 Resources:
   #S3 BUCKET
   GitlabS3Bucket:
@@ -283,6 +289,18 @@ Resources:
         - CIDRIP: !Ref GitLabRDSSecurityGroupCIDRParameter
       GroupDescription: Security group for database that will allow inbound traffic from instances
       EC2VpcId: !Ref GitLabVPC
+  
+  GitLabRedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup 
+    Properties:
+      GroupName: gitlab-redis-sec-group
+      SecurityGroupIngress:
+        -  IpProtocol: TCP
+           FromPort: 6379
+           ToPort: 6379
+           SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup #why source needed?
+      GroupDescription: Security group for Redis 
+      VpcId: !Ref GitLabVPC
 
   #LOAD BALANCER
   GitLabLoadBalancer:
@@ -318,7 +336,6 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: Group includes GitLabPrivateSubnetA and GitLabPrivateSubnetB
-      #DBSubnetGroupName: #may not need
       SubnetIds:
         - !Ref GitLabPrivateSubnetA
         - !Ref GitLabPrivateSubnetB 
@@ -326,23 +343,48 @@ Resources:
   GitLabDB:
     Type: AWS::RDS::DBInstance 
     Properties: 
-      AllocatedStorage: !Ref GitLabAllocatedStorageParameter #provisioned IOPS (SSD) for storage type?
+      AllocatedStorage: !Ref GitLabAllocatedStorageParameter 
       AutoMinorVersionUpgrade: False
-      #BackupRetentionPeriod:     #preferred backup settings == ? 
-      #DBClusterIdentifier: #related to Redis Cluster later?
+      BackupRetentionPeriod: 35 
       DBInstanceClass: !Ref DBInstanceClassParameter 
       DBInstanceIdentifier: !Ref DBInstanceIdentifierParameter
       DBSecurityGroups: 
         - !Ref GitLabRDSSecurityGroup
       DBSubnetGroupName: !Ref GitLabDBSubnetGroup 
-      Engine: postgres #or paramaterize? 
+      Engine: postgres
       MasterUsername: !Ref GitLabDBMasterUsernameParameter
       MasterUserPassword: !Ref GitLabDBMasterUserPasswordParameter 
       MultiAZ: True
-      #PreferredBackupWindow: 
-      #PreferredMaintenanceWindow: 
 
-      #it asks to make a 'standby instance'?? how
+  #REDIS WITH ELASTICACHE
+  GitLabRedisSubnetGroup: 
+    Type: AWS::ElastiCache::SubnetGroup 
+    Properties:
+      CacheSubnetGroupName: gitlab-redis-group
+      Description: Group includes GitLabPrivateSubnetA and GitLabPrivateSubnetB
+      SubnetIds:
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB 
+  
+  GitLabElastiCacheCluster: 
+    Type: AWS::ElastiCache::CacheCluster 
+    Properties: 
+      NumCacheNodes: 2 #how many is good? 
+      ClusterName: gitlab-redis
+      Engine: redis
+      EngineVersion: '5.0.6' #newest
+      Port: 6379 
+      CacheNodeType: !Ref CacheNodeTypeParameter
+      CacheSubnetGroupName: !Ref GitLabRedisSubnetGroup
+      PreferredAvailabilityZones: 
+        - !GetAtt GitLabPrivateSubnetA.AvailabilityZone 
+        - !GetAtt GitLabPrivateSubnetB.AvailabilityZone 
+      AZMode: cross-az #does this == multi-AZ auto-failover? 
+
+
+
+
+
 
 
 
