@@ -49,15 +49,43 @@ Parameters:
     Description: CIDR Block for Private Subnet B
     Default: 10.0.3.0/24
 
-  #LOAD BALANCER SECURITY GROUP
+  #SECURITY GROUPS
   GitLabLoadBalancerSecurityGroupCIDRParameter:
     Type: String
     Description: IPv4 address range for Load Balancer Security Group
 
-  #RDS SECURITY GROUP
   GitLabRDSSecurityGroupCIDRParameter:
     Type: String
     Description: CidrBlock for RDS Security Group
+  
+  #DATABASE
+  DBInstanceClassParameter:
+    Type: String
+    Description: DB EC2 Instnace Class. Default is db.m4.large
+    Default: db.m4.large  
+
+  DBInstanceIdentifierParameter:
+    Type: String
+    Description: Name for the DB instance. 
+  
+  GitLabDBMasterUsernameParameter:
+    Type: String
+    Description: Master user name for the DB instance
+  
+  GitLabDBMasterUserPasswordParameter:
+    Type: String
+    Description: Password for the master user. At least 8 characters. No slash, at symbol, or parentheses. 
+
+  GitLabAllocatedStorageParameter:
+    Type: String
+    Description: Amount of storage in gigabytes to be allocated for the database intsance
+    Default: '100' #minimum for PostgreSQL 
+
+  #ELASTICACHE/REDIS
+  CacheNodeTypeParameter:
+    Type: String
+    Description: Node type;  Multi-AZ not supported on T1 instances
+    Default: cache.t3.medium 
 
 Resources:
   #S3 BUCKET
@@ -158,6 +186,7 @@ Resources:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+
   GitLabElasticIPB:
     Type: AWS::EC2::EIP
     Properties:
@@ -260,6 +289,18 @@ Resources:
         - CIDRIP: !Ref GitLabRDSSecurityGroupCIDRParameter
       GroupDescription: Security group for database that will allow inbound traffic from instances
       EC2VpcId: !Ref GitLabVPC
+  
+  GitLabRedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup 
+    Properties:
+      GroupName: gitlab-redis-sec-group
+      SecurityGroupIngress:
+        -  IpProtocol: TCP
+           FromPort: 6379
+           ToPort: 6379
+           SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup #why source needed?
+      GroupDescription: Security group for Redis 
+      VpcId: !Ref GitLabVPC
 
   #LOAD BALANCER
   GitLabLoadBalancer:
@@ -290,8 +331,55 @@ Resources:
         - !Ref GitLabPublicSubnetA
         - !Ref GitLabPublicSubnetB
 
+  #RDS POSTGRESQL DATABASE
+  GitLabDBSubnetGroup: 
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Group includes GitLabPrivateSubnetA and GitLabPrivateSubnetB
+      SubnetIds:
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB 
 
-      
+  GitLabDB:
+    Type: AWS::RDS::DBInstance 
+    Properties: 
+      AllocatedStorage: !Ref GitLabAllocatedStorageParameter 
+      AutoMinorVersionUpgrade: False
+      BackupRetentionPeriod: 35 
+      DBInstanceClass: !Ref DBInstanceClassParameter 
+      DBInstanceIdentifier: !Ref DBInstanceIdentifierParameter
+      DBSecurityGroups: 
+        - !Ref GitLabRDSSecurityGroup
+      DBSubnetGroupName: !Ref GitLabDBSubnetGroup 
+      Engine: postgres
+      MasterUsername: !Ref GitLabDBMasterUsernameParameter
+      MasterUserPassword: !Ref GitLabDBMasterUserPasswordParameter 
+      MultiAZ: True
 
-
-
+  #REDIS WITH ELASTICACHE
+  GitLabRedisSubnetGroup: 
+    Type: AWS::ElastiCache::SubnetGroup 
+    Properties:
+      CacheSubnetGroupName: gitlab-redis-group
+      Description: Group includes GitLabPrivateSubnetA and GitLabPrivateSubnetB
+      SubnetIds:
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB 
+  
+  GitLabElastiCacheCluster: 
+    Type: AWS::ElastiCache::CacheCluster 
+    Properties: 
+      NumCacheNodes: 1
+      ClusterName: gitlab-redis
+      Engine: redis
+      EngineVersion: '5.0.6' #newest
+      Port: 6379 
+      CacheNodeType: !Ref CacheNodeTypeParameter
+      CacheSubnetGroupName: !Ref GitLabRedisSubnetGroup
+      PreferredAvailabilityZones: 
+        - !GetAtt GitLabPrivateSubnetA.AvailabilityZone 
+      AZMode: single-az #does multi-az == multi-AZ auto-failover?
+      #had to put only one Az because had to choose 1 NumCacheNodes when using Redis  
+      VpcSecurityGroupIds: 
+        - !GetAtt GitLabRedisSecurityGroup.GroupId
+  
