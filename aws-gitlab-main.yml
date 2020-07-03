@@ -74,7 +74,7 @@ Parameters:
   
   GitLabDBMasterUserPasswordParameter:
     Type: String
-    Description: Password for the master user.
+    Description: Password for the master user. At least 8 characters. No slash, at symbol, or parentheses. 
 
   GitLabAllocatedStorageParameter:
     Type: String
@@ -369,7 +369,7 @@ Resources:
   GitLabElastiCacheCluster: 
     Type: AWS::ElastiCache::CacheCluster 
     Properties: 
-      NumCacheNodes: 2 #how many is good? 
+      NumCacheNodes: 1
       ClusterName: gitlab-redis
       Engine: redis
       EngineVersion: '5.0.6' #newest
@@ -378,17 +378,8 @@ Resources:
       CacheSubnetGroupName: !Ref GitLabRedisSubnetGroup
       PreferredAvailabilityZones: 
         - !GetAtt GitLabPrivateSubnetA.AvailabilityZone 
-        - !GetAtt GitLabPrivateSubnetB.AvailabilityZone 
-      AZMode: cross-az #does this == multi-AZ auto-failover? 
-
-
-
-
-
-
-
-
-      
-
-
-
+      AZMode: single-az #does multi-az == multi-AZ auto-failover?
+      #had to put only one Az because had to choose 1 NumCacheNodes when using Redis  
+      VpcSecurityGroupIds: 
+        - !GetAtt GitLabRedisSecurityGroup.GroupId
+  
