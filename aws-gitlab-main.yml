@@ -486,6 +486,5 @@ Resources:
         - !Ref GitLabBastionHostSecurityGroup
       Tenancy: host     
       KeyName: !Ref GitLabBastionHostBKeyNameParameter 
-
     #Key pair will be done in console (i think?)
     
