@@ -83,7 +83,7 @@ Parameters:
   GitLabBastionSecurityGroupCIDRParameter:
     Type: String
     Description: Enable SSH access from what IP address(es). For stricter security, specify a single private IP 
-    Default: 127.0.0.1/8 #loopback
+    Default: 127.0.0.1/32 
 
   BastionHostAAvailabilityZoneParameter:
     Type: AWS::EC2::AvailabilityZone::Name
@@ -97,11 +97,7 @@ Parameters:
   GitLabBastionHostAAMIParameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Description: Latest AMI for Bastion Host A
-    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 #Ubuntu-Server-18.04-LTS-HVM
-
-  GitLabBastionHostAKeyNameParameter:
-    Type: String
-    Description: Name of Key Pair for Bastion Host A
+    Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
 
   BastionHostBAvailabilityZoneParameter:
     Type: AWS::EC2::AvailabilityZone::Name
@@ -115,11 +111,7 @@ Parameters:
   GitLabBastionHostBAMIParameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Description: Latest AMI for Bastion Host B
-    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 #Ubuntu-Server-18.04-LTS-HVM
-  
-  GitLabBastionHostBKeyNameParameter:
-    Type: String
-    Description: Name of Key Pair for Bastion Host B 
+    Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
 
 Resources:
   #S3 BUCKET
@@ -356,6 +348,7 @@ Resources:
           ToPort: 22
           CidrIp: !Ref GitLabBastionSecurityGroupCIDRParameter 
       GroupDescription: Security group for Bastion Hosts 
+      VpcId: !Ref GitLabVPC
 
   #LOAD BALANCER
   GitLabLoadBalancer:
@@ -395,12 +388,12 @@ Resources:
         - !Ref GitLabPrivateSubnetA
         - !Ref GitLabPrivateSubnetB 
 
-  GitLabDBRotationSecrets: 
+  GitLabDBSecrets: 
     Type: AWS::SecretsManager::Secret
     Properties:
       Description: DB password for the master user.
       GenerateSecretString: 
-        SecretStringTemplate: '{"username": "admin"}'
+        SecretStringTemplate: '{"username": "testuser"}'
         GenerateStringKey: 'password'
         PasswordLength: 16
         ExcludeCharacters: '"@/\'
@@ -418,9 +411,16 @@ Resources:
       DBSubnetGroupName: !Ref GitLabDBSubnetGroup 
       Engine: postgres
       EngineVersion: '12.3' #newest 
-      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBRotationSecrets, ':SecretString:username}}' ]]
-      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBRotationSecrets, ':SecretString:password}}' ]] 
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBSecrets, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBSecrets, ':SecretString:password}}' ]] 
       MultiAZ: True
+
+  GitLabSecretTargetAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties: 
+      SecretId: !Ref GitLabDBSecrets
+      TargetId: !Ref GitLabDB
+      TargetType: AWS::RDS::DBInstance 
 
   #REDIS WITH ELASTICACHE
   GitLabRedisSubnetGroup: 
@@ -454,7 +454,7 @@ Resources:
     Properties: 
       AvailabilityZone: !Ref BastionHostAAvailabilityZoneParameter 
       
-      ImageId: !Ref   GitLabBastionHostAAMIParameter 
+      ImageId: !Ref GitLabBastionHostAAMIParameter 
       InstanceType: !Ref GitLabBastionHostAInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetA
       Tags: 
@@ -462,23 +462,19 @@ Resources:
           Value: Bastion Host A 
       SecurityGroupIds: 
         - !Ref GitLabBastionHostSecurityGroup
-      Tenancy: host 
-      KeyName: !Ref GitLabBastionHostAKeyNameParameter
 
   GitLabBastionHostB:
     Type: AWS::EC2::Instance
     Properties: 
       AvailabilityZone: !Ref BastionHostBAvailabilityZoneParameter 
       
-      ImageId: !Ref   GitLabBastionHostBAMIParameter 
+      ImageId: !Ref GitLabBastionHostBAMIParameter 
       InstanceType: !Ref GitLabBastionHostBInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetB
       Tags: 
         - Key: Name
           Value: Bastion Host B 
       SecurityGroupIds: 
-        - !Ref GitLabBastionHostSecurityGroup
-      Tenancy: host     
-      KeyName: !Ref GitLabBastionHostBKeyNameParameter 
+        - !Ref GitLabBastionHostSecurityGroup  
 
     
