@@ -59,22 +59,14 @@ Parameters:
     Description: CidrBlock for RDS Security Group
   
   #DATABASE
-  DBInstanceClassParameter:
+  GitLabDBInstanceClassParameter:
     Type: String
     Description: DB EC2 Instnace Class. Default is db.m4.large
     Default: db.m4.large  
 
-  DBInstanceIdentifierParameter:
+  GitLabDBInstanceIdentifierParameter:
     Type: String
     Description: Name for the DB instance. 
-  
-  GitLabDBMasterUsernameParameter:
-    Type: String
-    Description: Master user name for the DB instance
-  
-  GitLabDBMasterUserPasswordParameter:
-    Type: String
-    Description: Password for the master user. At least 8 characters. No slash, at symbol, or parentheses. 
 
   GitLabAllocatedStorageParameter:
     Type: String
@@ -82,10 +74,44 @@ Parameters:
     Default: '100' #minimum for PostgreSQL 
 
   #ELASTICACHE/REDIS
-  CacheNodeTypeParameter:
+  GitLabCacheNodeTypeParameter:
     Type: String
     Description: Node type;  Multi-AZ not supported on T1 instances
     Default: cache.t3.medium 
+  
+  #BASTION HOSTS
+  GitLabBastionSecurityGroupCIDRParameter:
+    Type: String
+    Description: Enable SSH access from what IP address(es). For stricter security, specify a single private IP 
+    Default: 127.0.0.1/32 
+
+  BastionHostAAvailabilityZoneParameter:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for Bastion Host A
+    
+  GitLabBastionHostAInstanceTypeParameter:
+    Type: String
+    Description: EC2 instance type for Bastion Host A
+    Default: t2.micro 
+
+  GitLabBastionHostAAMIParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest AMI for Bastion Host A
+    Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
+
+  BastionHostBAvailabilityZoneParameter:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for Bastion Host B
+
+  GitLabBastionHostBInstanceTypeParameter:
+    Type: String
+    Description: EC2 instance type for Bastion Host B
+    Default: t2.micro 
+
+  GitLabBastionHostBAMIParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest AMI for Bastion Host B
+    Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
 
 Resources:
   #S3 BUCKET
@@ -182,12 +208,22 @@ Resources:
       InternetGatewayId: !Ref GitLabInternetGateway
 
   #EIP
-  GitLabElasticIPA:
+  GitLabNATGatewayAElasticIP:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
 
-  GitLabElasticIPB:
+  GitLabNATGatewayBElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  
+  GitLabBastionHostAElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  GitLabBastionHostBElasticIP:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
@@ -196,13 +232,13 @@ Resources:
   GitLabNATGatewayA:
     Type: AWS::EC2::NatGateway
     Properties:
-      AllocationId: !GetAtt GitLabElasticIPA.AllocationId
+      AllocationId: !GetAtt GitLabNATGatewayAElasticIP.AllocationId
       SubnetId: !Ref GitLabPublicSubnetA
 
   GitLabNatGatewayB:
     Type: AWS::EC2::NatGateway
     Properties:
-      AllocationId: !GetAtt GitLabElasticIPB.AllocationId
+      AllocationId: !GetAtt GitLabNATGatewayBElasticIP.AllocationId
       SubnetId: !Ref GitLabPublicSubnetB
 
   GitLabPublicRoute:
@@ -301,6 +337,18 @@ Resources:
            SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup #why source needed?
       GroupDescription: Security group for Redis 
       VpcId: !Ref GitLabVPC
+  
+  GitLabBastionHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup 
+    Properties:
+      GroupName: gitlab-bastion-sec-group 
+      SecurityGroupIngress:
+        - IpProtocol: TCP
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref GitLabBastionSecurityGroupCIDRParameter 
+      GroupDescription: Security group for Bastion Hosts 
+      VpcId: !Ref GitLabVPC
 
   #LOAD BALANCER
   GitLabLoadBalancer:
@@ -340,21 +388,39 @@ Resources:
         - !Ref GitLabPrivateSubnetA
         - !Ref GitLabPrivateSubnetB 
 
+  GitLabDBSecrets: 
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: DB password for the master user.
+      GenerateSecretString: 
+        SecretStringTemplate: '{"username": "testuser"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+
   GitLabDB:
     Type: AWS::RDS::DBInstance 
     Properties: 
       AllocatedStorage: !Ref GitLabAllocatedStorageParameter 
       AutoMinorVersionUpgrade: False
       BackupRetentionPeriod: 35 
-      DBInstanceClass: !Ref DBInstanceClassParameter 
-      DBInstanceIdentifier: !Ref DBInstanceIdentifierParameter
+      DBInstanceClass: !Ref GitLabDBInstanceClassParameter 
+      DBInstanceIdentifier: !Ref GitLabDBInstanceIdentifierParameter
       DBSecurityGroups: 
         - !Ref GitLabRDSSecurityGroup
       DBSubnetGroupName: !Ref GitLabDBSubnetGroup 
       Engine: postgres
-      MasterUsername: !Ref GitLabDBMasterUsernameParameter
-      MasterUserPassword: !Ref GitLabDBMasterUserPasswordParameter 
+      EngineVersion: '12.3' #newest 
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBSecrets, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBSecrets, ':SecretString:password}}' ]] 
       MultiAZ: True
+
+  GitLabSecretTargetAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties: 
+      SecretId: !Ref GitLabDBSecrets
+      TargetId: !Ref GitLabDB
+      TargetType: AWS::RDS::DBInstance 
 
   #REDIS WITH ELASTICACHE
   GitLabRedisSubnetGroup: 
@@ -374,12 +440,41 @@ Resources:
       Engine: redis
       EngineVersion: '5.0.6' #newest
       Port: 6379 
-      CacheNodeType: !Ref CacheNodeTypeParameter
+      CacheNodeType: !Ref GitLabCacheNodeTypeParameter
       CacheSubnetGroupName: !Ref GitLabRedisSubnetGroup
       PreferredAvailabilityZones: 
         - !GetAtt GitLabPrivateSubnetA.AvailabilityZone 
-      AZMode: single-az #does multi-az == multi-AZ auto-failover?
-      #had to put only one Az because had to choose 1 NumCacheNodes when using Redis  
+      AZMode: single-az
       VpcSecurityGroupIds: 
         - !GetAtt GitLabRedisSecurityGroup.GroupId
-  
+ 
+  #BASTION HOSTS
+  GitLabBastionHostA:
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Ref BastionHostAAvailabilityZoneParameter 
+      
+      ImageId: !Ref GitLabBastionHostAAMIParameter 
+      InstanceType: !Ref GitLabBastionHostAInstanceTypeParameter
+      SubnetId: !Ref GitLabPublicSubnetA
+      Tags: 
+        - Key: Name
+          Value: Bastion Host A 
+      SecurityGroupIds: 
+        - !Ref GitLabBastionHostSecurityGroup
+
+  GitLabBastionHostB:
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Ref BastionHostBAvailabilityZoneParameter 
+      
+      ImageId: !Ref GitLabBastionHostBAMIParameter 
+      InstanceType: !Ref GitLabBastionHostBInstanceTypeParameter
+      SubnetId: !Ref GitLabPublicSubnetB
+      Tags: 
+        - Key: Name
+          Value: Bastion Host B 
+      SecurityGroupIds: 
+        - !Ref GitLabBastionHostSecurityGroup  
+
+    
