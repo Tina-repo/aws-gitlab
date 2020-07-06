@@ -67,15 +67,6 @@ Parameters:
   GitLabDBInstanceIdentifierParameter:
     Type: String
     Description: Name for the DB instance. 
-  
-  GitLabDBMasterUsernameParameter:
-    Type: String
-    Description: Master user name for the DB instance
-  
-  GitLabDBMasterUserPasswordParameter:
-    Type: String
-    Description: Password for the master user. At least 8 characters. No slash, at symbol, or parentheses. 
-    NoEcho: True 
 
   GitLabAllocatedStorageParameter:
     Type: String
@@ -91,8 +82,8 @@ Parameters:
   #BASTION HOSTS
   GitLabBastionSecurityGroupCIDRParameter:
     Type: String
-    Description: Enable SSH access from what IP address(es). For stricter security, specify a single IP 
-    Default: 0.0.0.0/0 
+    Description: Enable SSH access from what IP address(es). For stricter security, specify a single private IP 
+    Default: 127.0.0.1/8 #loopback
 
   BastionHostAAvailabilityZoneParameter:
     Type: AWS::EC2::AvailabilityZone::Name
@@ -104,9 +95,9 @@ Parameters:
     Default: t2.micro 
 
   GitLabBastionHostAAMIParameter:
-    Type: AWS::EC2::Image::Id
-    Description: ID of AMI for Bastion Host A
-    Default: Ubuntu-Server-18.04-LTS-HVM
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest AMI for Bastion Host A
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 #Ubuntu-Server-18.04-LTS-HVM
 
   GitLabBastionHostAKeyNameParameter:
     Type: String
@@ -122,9 +113,9 @@ Parameters:
     Default: t2.micro 
 
   GitLabBastionHostBAMIParameter:
-    Type: AWS::EC2::Image::Id
-    Description: ID of AMI for Bastion Host B
-    Default: Ubuntu-Server-18.04-LTS-HVM
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest AMI for Bastion Host B
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 #Ubuntu-Server-18.04-LTS-HVM
   
   GitLabBastionHostBKeyNameParameter:
     Type: String
@@ -404,6 +395,16 @@ Resources:
         - !Ref GitLabPrivateSubnetA
         - !Ref GitLabPrivateSubnetB 
 
+  GitLabDBRotationSecrets: 
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: DB password for the master user.
+      GenerateSecretString: 
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+
   GitLabDB:
     Type: AWS::RDS::DBInstance 
     Properties: 
@@ -416,8 +417,9 @@ Resources:
         - !Ref GitLabRDSSecurityGroup
       DBSubnetGroupName: !Ref GitLabDBSubnetGroup 
       Engine: postgres
-      MasterUsername: !Ref GitLabDBMasterUsernameParameter
-      MasterUserPassword: !Ref GitLabDBMasterUserPasswordParameter 
+      EngineVersion: '12.3' #newest 
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBRotationSecrets, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref GitLabDBRotationSecrets, ':SecretString:password}}' ]] 
       MultiAZ: True
 
   #REDIS WITH ELASTICACHE
@@ -442,8 +444,7 @@ Resources:
       CacheSubnetGroupName: !Ref GitLabRedisSubnetGroup
       PreferredAvailabilityZones: 
         - !GetAtt GitLabPrivateSubnetA.AvailabilityZone 
-      AZMode: single-az #does multi-az == multi-AZ auto-failover?
-      #had to put only one Az because had to choose 1 NumCacheNodes when using Redis  
+      AZMode: single-az
       VpcSecurityGroupIds: 
         - !GetAtt GitLabRedisSecurityGroup.GroupId
  
@@ -453,15 +454,9 @@ Resources:
     Properties: 
       AvailabilityZone: !Ref BastionHostAAvailabilityZoneParameter 
       
-      ImageId: !Ref   GitLabBastionHostAAMIParameter #ubuntu server 18.04 LTS (HVM) AMI 
+      ImageId: !Ref   GitLabBastionHostAAMIParameter 
       InstanceType: !Ref GitLabBastionHostAInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetA
-      #NetworkInterfaces:
-      #   - AssociatePublicIpAddress: "true" #enable auto-assign public IP 
-      # BlockDeviceMappings:  #/dev/sdh or xvdh? 
-      #   - DeviceName: 
-      #     Ebs:
-      #       VolumeSize: 8 #asks for an additional 8GB root volume; how?
       Tags: 
         - Key: Name
           Value: Bastion Host A 
@@ -475,10 +470,9 @@ Resources:
     Properties: 
       AvailabilityZone: !Ref BastionHostBAvailabilityZoneParameter 
       
-      ImageId: !Ref   GitLabBastionHostBAMIParameter #ubuntu server 18.04 LTS (HVM) AMI 
+      ImageId: !Ref   GitLabBastionHostBAMIParameter 
       InstanceType: !Ref GitLabBastionHostBInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetB
-      #placeholder
       Tags: 
         - Key: Name
           Value: Bastion Host B 
@@ -486,6 +480,5 @@ Resources:
         - !Ref GitLabBastionHostSecurityGroup
       Tenancy: host     
       KeyName: !Ref GitLabBastionHostBKeyNameParameter 
-      
-    #Key pair will be done in console (i think?)
+
     
