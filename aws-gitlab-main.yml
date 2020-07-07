@@ -85,7 +85,7 @@ Parameters:
     Description: Enable SSH access from what IP address(es). For stricter security, specify a single private IP 
     Default: 127.0.0.1/32 
 
-  BastionHostAAvailabilityZoneParameter:
+  GitHubBastionHostAAvailabilityZoneParameter:
     Type: AWS::EC2::AvailabilityZone::Name
     Description: AZ for Bastion Host A
     
@@ -99,7 +99,7 @@ Parameters:
     Description: Latest AMI for Bastion Host A
     Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
 
-  BastionHostBAvailabilityZoneParameter:
+  GitHubBastionHostBAvailabilityZoneParameter:
     Type: AWS::EC2::AvailabilityZone::Name
     Description: AZ for Bastion Host B
 
@@ -112,6 +112,11 @@ Parameters:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Description: Latest Ubuntu AMI for Bastion Host B
     Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
+  
+  GitLabAutoScalingGroupDesiredCapacityParameter:
+    Type: String 
+    Description: Number of EC2 instances at start up 
+    Default: '2' 
 
   #GITLAB
   GitLabAvailabilityZoneParameter:
@@ -129,11 +134,51 @@ Parameters:
     Default: c5.xlarge
 
   #GITALY
-  GitalyAMIParameter: 
+  GitLabGitalyAMIParameter: 
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Description: Latest Ubuntu AMI for Gitaly
     Default: /gitlab/gitaly/ami/ubuntu-server-18.04-lts-hvm # ami-0ac80df6eff0e70b5 create in parameter store 
 
+  GitLabGitalyInstanceTypeParameter:
+    Type: String
+    Description: EC2 instance type for Gitaly AMI
+    Default: c5.xlarge
+
+  #LAUNCH CONFIGURATIONS 
+  GitLabLaunchConfogurationInstanceTypeParameter:
+    Type: String 
+    Description: EC2 instance type for launch configurations 
+    Default: c5.xlarge
+  
+  #AUTO SCALING GROUP 
+  GitLabHealthCheckGracePeriodParameter:
+    Type: String
+    Description: Number of seconds for health check grace period
+    Default: '300'
+  
+  GitLabLoadBalancerHealthCheckTypeParameter:
+    Type: String
+    Description: The service to use for the health checks
+    Default: ELB
+    AllowedValues:
+      - ELB
+      - EC2
+  
+  GitLabMaxSizeParameter:
+    Type: String
+    Description: Max number of EC2 instances for auto scaling 
+    Default: 4
+  
+  GitLabMinSizeParameter:
+    Type: String
+    Description: Min number of EC2 instances for auto scaling 
+    Default: 2
+  
+  GitLabScalingPolicyTargetValueParameter:
+    Type: String
+    Description: Target for CPU use 
+    Default: 60.0
+  
 Resources:
   #S3 BUCKET
   GitlabS3Bucket:
@@ -488,7 +533,7 @@ Resources:
   GitLabBastionHostA:
     Type: AWS::EC2::Instance
     Properties: 
-      AvailabilityZone: !Ref BastionHostAAvailabilityZoneParameter 
+      AvailabilityZone: !Ref GitHubBastionHostAAvailabilityZoneParameter 
       ImageId: !Ref GitLabBastionHostAAMIParameter 
       InstanceType: !Ref GitLabBastionHostAInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetA
@@ -501,7 +546,7 @@ Resources:
   GitLabBastionHostB:
     Type: AWS::EC2::Instance
     Properties: 
-      AvailabilityZone: !Ref BastionHostBAvailabilityZoneParameter 
+      AvailabilityZone: !Ref GitHubBastionHostBAvailabilityZoneParameter 
       ImageId: !Ref GitLabBastionHostBAMIParameter 
       InstanceType: !Ref GitLabBastionHostBInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetB
@@ -514,7 +559,7 @@ Resources:
   #SSH AGENT FORWARDING??
 
     #connect GitLab instance via Bastion Host A using SSH Agent Forwarding to allow:
-    #disable Encrypt that is included in GitLab's default settings 
+    #disable Encrypt that is included in GitLab's default settings (this is for SSL certificate, which we havent specified though)
     #install pg_trgm extension for PostgreSQL
     #connect GitLab to PostgreSQL and Redis 
 
@@ -538,13 +583,62 @@ Resources:
     Properties: 
       AvailabilityZone: !Ref GitLabAvailabilityZoneParameter
       ImageId: !Ref GitalyAMIParameter
-      InstanceType: !Ref GitLabInstanceTypeParameter 
+      InstanceType: !Ref GitLabGitalyInstanceTypeParameter
       SubnetId: !Ref GitLabPrivateSubnetA 
       SecurityGroupIds: 
         - !Ref GitLabGitalySecurityGroup
       Tags: 
         - Key: Name
           Value: Gitaly
-    
-    #says choose storage volume size to fit your requirements. Should I just leave @ default?
-    #says change volume type to provisioned iops ssd (iol), but should I just ignore BlockDeviceMappings again?
+
+  #set up Gitaly on its own server (aka separate from clients)
+  #update config to authorize SSH users via indexed lookup in GitLab database. config fast lookup via GitLab Shell
+  #configure static host keys 
+  #S3 object storage 
+
+  #CUSTOM AMI 
+    #create an image called GitLab-Source based on the stated configuration changes
+
+  #LAUNCH CONFIGURATIONS
+  GitLabLaunchConfigurations:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties: 
+      ImageId: #!Ref CUSTOM AMI
+      InstanceType: !Ref GitLabLaunchConfogurationInstanceTypeParameter
+      LaunchConfigurationName: gitlab-ha-launch-config
+      IamInstanceProfile: !Ref GitLabS3Access
+      SecurityGroups:
+        - !Ref GitLabLoadBalancerSecurityGroup
+  
+  #AUTO SCALING GROUP 
+  GitLabAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: gitlab-auto-scaling-group
+      LaunchConfigurationName: !Ref GitLabLaunchConfiguration 
+      DesiredCapacity: !Ref GitLabAutoScalingGroupDesiredCapacityParameter
+      VPCZoneIdentifier: 
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB
+      LoadBalancerNames:
+        - !Ref GitLabLoadBalancer
+      HealthCheckType: !Ref GitLabLoadBalancerHealthCheckTypeParameter 
+      HealthCheckGracePeriod: !Ref GitLabHealthCheckGracePeriodParameter 
+      MaxSize: !Ref GitLabMaxSizeParameter
+      MinSize: !Ref GitLabMinSizeParameter
+      VPCZoneIdentifier:
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB
+
+  GitLabAutoScalingScalingPolicy: 
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: !Ref GitLabScalingPolicyTargetValueParameter
+      AutoScalingGroupName: !Ref GitLabAutoScalingGroup
+      EstimatedInstanceWarmup: 120 
+
