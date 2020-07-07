@@ -110,8 +110,29 @@ Parameters:
 
   GitLabBastionHostBAMIParameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Description: Latest AMI for Bastion Host B
+    Description: Latest Ubuntu AMI for Bastion Host B
     Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
+
+  #GITLAB
+  GitLabAvailabilityZoneParameter:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for GitLab AMI 
+  
+  GitLabAMIParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest Gitlab AMI
+    Default: /gitlab/gitlab/ami/gitlab-ce-12.2.5 # ami-00006f6838542d59c create in parameter store
+
+  GitLabInstanceTypeParameter:
+    Type: String
+    Description: EC2 instance type for GitLab AMI
+    Default: c5.xlarge
+
+  #GITALY
+  GitalyAMIParameter: 
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Latest Ubuntu AMI for Gitaly
+    Default: /gitlab/gitaly/ami/ubuntu-server-18.04-lts-hvm # ami-0ac80df6eff0e70b5 create in parameter store 
 
 Resources:
   #S3 BUCKET
@@ -334,7 +355,7 @@ Resources:
         -  IpProtocol: TCP
            FromPort: 6379
            ToPort: 6379
-           SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup #why source needed?
+           SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup 
       GroupDescription: Security group for Redis 
       VpcId: !Ref GitLabVPC
   
@@ -348,6 +369,21 @@ Resources:
           ToPort: 22
           CidrIp: !Ref GitLabBastionSecurityGroupCIDRParameter 
       GroupDescription: Security group for Bastion Hosts 
+      VpcId: !Ref GitLabVPC
+
+  GitLabGitalySecurityGroup: 
+    Type: AWS::EC2::SecurityGroup 
+    Properties:
+      GroupName: gitlab-gitaly-sec-group 
+      SecurityGroupIngress:
+        - IpProtocol: TCP
+          FromPort: 22
+          ToPort: 22
+        - IpProtocol: TCP
+          FromPort: 8075
+          ToPort: 8075
+          SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup
+      GroupDescription: Security Group for Gitaly
       VpcId: !Ref GitLabVPC
 
   #LOAD BALANCER
@@ -453,7 +489,6 @@ Resources:
     Type: AWS::EC2::Instance
     Properties: 
       AvailabilityZone: !Ref BastionHostAAvailabilityZoneParameter 
-      
       ImageId: !Ref GitLabBastionHostAAMIParameter 
       InstanceType: !Ref GitLabBastionHostAInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetA
@@ -467,14 +502,49 @@ Resources:
     Type: AWS::EC2::Instance
     Properties: 
       AvailabilityZone: !Ref BastionHostBAvailabilityZoneParameter 
-      
       ImageId: !Ref GitLabBastionHostBAMIParameter 
       InstanceType: !Ref GitLabBastionHostBInstanceTypeParameter
       SubnetId: !Ref GitLabPublicSubnetB
+      SecurityGroupIds: 
+        - !Ref GitLabBastionHostSecurityGroup  
       Tags: 
         - Key: Name
           Value: Bastion Host B 
-      SecurityGroupIds: 
-        - !Ref GitLabBastionHostSecurityGroup  
 
+  #SSH AGENT FORWARDING??
+
+    #connect GitLab instance via Bastion Host A using SSH Agent Forwarding to allow:
+    #disable Encrypt that is included in GitLab's default settings 
+    #install pg_trgm extension for PostgreSQL
+    #connect GitLab to PostgreSQL and Redis 
+
+  #GITLAB
+  GitLab:
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Ref GitLabAvailabilityZoneParameter
+      ImageId: !Ref GitLabAMIParameter 
+      InstanceType: !Ref GitLabInstanceTypeParameter 
+      SubnetId: !Ref GitLabPrivateSubnetA 
+      SecurityGroupIds: 
+        - !Ref GitLabLoadBalancerSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: GitLab
+
+  #GITALY
+  Gitaly:
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Ref GitLabAvailabilityZoneParameter
+      ImageId: !Ref GitalyAMIParameter
+      InstanceType: !Ref GitLabInstanceTypeParameter 
+      SubnetId: !Ref GitLabPrivateSubnetA 
+      SecurityGroupIds: 
+        - !Ref GitLabGitalySecurityGroup
+      Tags: 
+        - Key: Name
+          Value: Gitaly
     
+    #says choose storage volume size to fit your requirements. Should I just leave @ default?
+    #says change volume type to provisioned iops ssd (iol), but should I just ignore BlockDeviceMappings again?
