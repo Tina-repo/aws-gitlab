@@ -78,52 +78,84 @@ Parameters:
     Type: String
     Description: Node type;  Multi-AZ not supported on T1 instances
     Default: cache.t3.medium 
+
+  #GITLAB
+  GitLabAvailabilityZoneParameter:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for GitLab AMI 
   
-  #BASTION HOSTS
-  GitLabBastionSecurityGroupCIDRParameter:
-    Type: String
-    Description: Enable SSH access from what IP address(es). For stricter security, specify a single private IP 
-    Default: 127.0.0.1/32 
-
-  BastionHostAAvailabilityZoneParameter:
-    Type: AWS::EC2::AvailabilityZone::Name
-    Description: AZ for Bastion Host A
-    
-  GitLabBastionHostAInstanceTypeParameter:
-    Type: String
-    Description: EC2 instance type for Bastion Host A
-    Default: t2.micro 
-
-  GitLabBastionHostAAMIParameter:
+  GitLabAMIParameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Description: Latest AMI for Bastion Host A
-    Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
+    Description: Latest Gitlab AMI
+    Default: /gitlab/gitlab/ami/gitlab-ce-12.2.5 
 
-  BastionHostBAvailabilityZoneParameter:
-    Type: AWS::EC2::AvailabilityZone::Name
-    Description: AZ for Bastion Host B
-
-  GitLabBastionHostBInstanceTypeParameter:
+  GitLabInstanceTypeParameter:
     Type: String
-    Description: EC2 instance type for Bastion Host B
-    Default: t2.micro 
+    Description: EC2 instance type for GitLab AMI
+    Default: c5.xlarge
 
-  GitLabBastionHostBAMIParameter:
+  #GITALY
+  GitLabGitalyAMIParameter: 
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Description: Latest AMI for Bastion Host B
-    Default: /gitlab/bastion-hosts/ami/ubuntu-server-18.04-lts-hvm
+    Description: Latest Ubuntu AMI for Gitaly
+    Default: /gitlab/gitaly/ami/ubuntu-server-18.04-lts-hvm
 
+  GitLabGitalyInstanceTypeParameter:
+    Type: String
+    Description: EC2 instance type for Gitaly AMI
+    Default: c5.xlarge
+
+  #LAUNCH CONFIGURATIONS 
+  GitLabLaunchConfogurationInstanceTypeParameter:
+    Type: String 
+    Description: EC2 instance type for launch configurations 
+    Default: c5.xlarge
+  
+  GitLabLaunchConfigurationNameParameter:
+    Type: String
+    Description: Name of launch configuration 
+  
+  #AUTO SCALING GROUP 
+  GitLabHealthCheckGracePeriodParameter:
+    Type: String
+    Description: Number of seconds for health check grace period
+    Default: '300'
+  
+  GitLabLoadBalancerHealthCheckTypeParameter:
+    Type: String
+    Description: The service to use for the health checks
+    Default: ELB
+    AllowedValues:
+      - ELB
+      - EC2
+  
+  GitLabMaxSizeParameter:
+    Type: String
+    Description: Max number of EC2 instances for auto scaling 
+    Default: 4
+  
+  GitLabMinSizeParameter:
+    Type: String
+    Description: Min number of EC2 instances for auto scaling 
+    Default: 2
+  
+  GitLabScalingPolicyTargetValueParameter:
+    Type: String
+    Description: Target for CPU use 
+    Default: 60.0
+  
+  #AUTO SCALING  
+  GitLabAutoScalingGroupDesiredCapacityParameter:
+    Type: String 
+    Description: Number of EC2 instances at start up 
+    Default: '2'  
+  
 Resources:
   #S3 BUCKET
   GitlabS3Bucket:
     Type: AWS::S3::Bucket
 
-  GitLabPublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref GitLabVPC
-
-  #ROLE W/ IMBEDDED POLICY
+  #ROLE W/ EMBEDDED POLICY
   GitLabS3Access:
     Type: AWS::IAM::Role
     Properties:
@@ -217,16 +249,6 @@ Resources:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
-  
-  GitLabBastionHostAElasticIP:
-    Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc
-
-  GitLabBastionHostBElasticIP:
-    Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc
 
   #NAT GATEWAY
   GitLabNATGatewayA:
@@ -240,6 +262,12 @@ Resources:
     Properties:
       AllocationId: !GetAtt GitLabNATGatewayBElasticIP.AllocationId
       SubnetId: !Ref GitLabPublicSubnetB
+  
+  #NETWORK 
+  GitLabPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GitLabVPC
 
   GitLabPublicRoute:
     Type: AWS::EC2::Route
@@ -334,20 +362,23 @@ Resources:
         -  IpProtocol: TCP
            FromPort: 6379
            ToPort: 6379
-           SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup #why source needed?
+           SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup 
       GroupDescription: Security group for Redis 
       VpcId: !Ref GitLabVPC
-  
-  GitLabBastionHostSecurityGroup:
+
+  GitLabGitalySecurityGroup: 
     Type: AWS::EC2::SecurityGroup 
     Properties:
-      GroupName: gitlab-bastion-sec-group 
+      GroupName: gitlab-gitaly-sec-group 
       SecurityGroupIngress:
         - IpProtocol: TCP
           FromPort: 22
           ToPort: 22
-          CidrIp: !Ref GitLabBastionSecurityGroupCIDRParameter 
-      GroupDescription: Security group for Bastion Hosts 
+        - IpProtocol: TCP
+          FromPort: 8075
+          ToPort: 8075
+          SourceSecurityGroupId: !Ref GitLabLoadBalancerSecurityGroup
+      GroupDescription: Security Group for Gitaly
       VpcId: !Ref GitLabVPC
 
   #LOAD BALANCER
@@ -374,7 +405,8 @@ Resources:
       Scheme: internet-facing
       SecurityGroups:
         - !Ref GitLabLoadBalancerSecurityGroup
-      #Instances: #IDs of EC2 instnaces for LB (add later)
+      Instances: 
+        - !Ref GitLab
       Subnets:
         - !Ref GitLabPublicSubnetA
         - !Ref GitLabPublicSubnetB
@@ -447,34 +479,73 @@ Resources:
       AZMode: single-az
       VpcSecurityGroupIds: 
         - !GetAtt GitLabRedisSecurityGroup.GroupId
+
+  #GITLAB
+  GitLab:
+    Type: AWS::EC2::Instance
+    Properties: 
+      AvailabilityZone: !Ref GitLabAvailabilityZoneParameter
+      ImageId: !Ref GitLabAMIParameter 
+      InstanceType: !Ref GitLabInstanceTypeParameter 
+      SubnetId: !Ref GitLabPrivateSubnetA 
+      SecurityGroupIds: 
+        - !Ref GitLabLoadBalancerSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: GitLab
  
-  #BASTION HOSTS
-  GitLabBastionHostA:
+  #GITALY
+  Gitaly:
     Type: AWS::EC2::Instance
     Properties: 
-      AvailabilityZone: !Ref BastionHostAAvailabilityZoneParameter 
-      
-      ImageId: !Ref GitLabBastionHostAAMIParameter 
-      InstanceType: !Ref GitLabBastionHostAInstanceTypeParameter
-      SubnetId: !Ref GitLabPublicSubnetA
+      AvailabilityZone: !Ref GitLabAvailabilityZoneParameter
+      ImageId: !Ref GitLabGitalyAMIParameter
+      InstanceType: !Ref GitLabGitalyInstanceTypeParameter
+      SubnetId: !Ref GitLabPrivateSubnetA 
+      SecurityGroupIds: 
+        - !Ref GitLabGitalySecurityGroup
       Tags: 
         - Key: Name
-          Value: Bastion Host A 
-      SecurityGroupIds: 
-        - !Ref GitLabBastionHostSecurityGroup
+          Value: Gitaly
 
-  GitLabBastionHostB:
-    Type: AWS::EC2::Instance
+  #LAUNCH CONFIGURATIONS
+  GitLabLaunchConfigurations:
+    Type: AWS::AutoScaling::LaunchConfiguration
     Properties: 
-      AvailabilityZone: !Ref BastionHostBAvailabilityZoneParameter 
-      
-      ImageId: !Ref GitLabBastionHostBAMIParameter 
-      InstanceType: !Ref GitLabBastionHostBInstanceTypeParameter
-      SubnetId: !Ref GitLabPublicSubnetB
-      Tags: 
-        - Key: Name
-          Value: Bastion Host B 
-      SecurityGroupIds: 
-        - !Ref GitLabBastionHostSecurityGroup  
+      ImageId: !Ref GitLabAMIParameter
+      InstanceType: !Ref GitLabLaunchConfogurationInstanceTypeParameter
+      LaunchConfigurationName: gitlab-ha-launch-config
+      IamInstanceProfile: !Ref GitLabS3InstanceProfile
+      SecurityGroups:
+        - !Ref GitLabLoadBalancerSecurityGroup
+  
+  #AUTO SCALING GROUP 
+  GitLabAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: gitlab-auto-scaling-group
+      LaunchConfigurationName: !Ref GitLabLaunchConfigurationNameParameter 
+      DesiredCapacity: !Ref GitLabAutoScalingGroupDesiredCapacityParameter
+      VPCZoneIdentifier: 
+        - !Ref GitLabPrivateSubnetA
+        - !Ref GitLabPrivateSubnetB
+      LoadBalancerNames:
+        - !Ref GitLabLoadBalancer
+      HealthCheckType: !Ref GitLabLoadBalancerHealthCheckTypeParameter 
+      HealthCheckGracePeriod: !Ref GitLabHealthCheckGracePeriodParameter 
+      MaxSize: !Ref GitLabMaxSizeParameter
+      MinSize: !Ref GitLabMinSizeParameter
 
-    
+  GitLabAutoScalingScalingPolicy: 
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: !Ref GitLabScalingPolicyTargetValueParameter
+      AutoScalingGroupName: !Ref GitLabAutoScalingGroup
+      EstimatedInstanceWarmup: 120 
+
+
