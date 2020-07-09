@@ -114,6 +114,7 @@ Parameters:
   GitLabLaunchConfigurationNameParameter:
     Type: String
     Description: Name of launch configuration 
+    Default: gitlab-ha-launch-config
   
   #AUTO SCALING GROUP 
   GitLabHealthCheckGracePeriodParameter:
@@ -514,7 +515,7 @@ Resources:
     Properties: 
       ImageId: !Ref GitLabAMIParameter
       InstanceType: !Ref GitLabLaunchConfogurationInstanceTypeParameter
-      LaunchConfigurationName: gitlab-ha-launch-config
+      LaunchConfigurationName: !Ref GitLabLaunchConfigurationNameParameter
       IamInstanceProfile: !Ref GitLabS3InstanceProfile
       SecurityGroups:
         - !Ref GitLabLoadBalancerSecurityGroup
@@ -524,7 +525,7 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       AutoScalingGroupName: gitlab-auto-scaling-group
-      LaunchConfigurationName: !Ref GitLabLaunchConfigurationNameParameter 
+      LaunchConfigurationName: !Ref GitLabLaunchConfigurations 
       DesiredCapacity: !Ref GitLabAutoScalingGroupDesiredCapacityParameter
       VPCZoneIdentifier: 
         - !Ref GitLabPrivateSubnetA
